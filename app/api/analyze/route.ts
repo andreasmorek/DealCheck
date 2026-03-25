@@ -69,19 +69,19 @@ function extractJson(text: string): ExtractedAnalyzeResult {
   }
 }
 
-function normalizeText(v: unknown) {
-  return typeof v === "string" ? v.trim() : "";
+function normalizeText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
 }
 
-function normalizeCurrency(v: unknown) {
-  return typeof v === "string" && v.trim() ? v.trim().toUpperCase() : "EUR";
+function normalizeCurrency(value: unknown): string {
+  return typeof value === "string" && value.trim() ? value.trim().toUpperCase() : "EUR";
 }
 
-function normalizePrice(v: unknown) {
-  if (typeof v === "number") return v;
+function normalizePrice(value: unknown): number {
+  if (typeof value === "number") return value;
 
-  if (typeof v === "string") {
-    const normalized = v
+  if (typeof value === "string") {
+    const normalized = value
       .replace(/[^\d,.-]/g, "")
       .replace(/\.(?=\d{3}(?:[,.]|$))/g, "")
       .replace(",", ".");
@@ -104,13 +104,15 @@ function normalizeResult(data: Partial<ExtractedAnalyzeResult>): ExtractedAnalyz
   };
 }
 
-function calculateScore(r: ExtractedAnalyzeResult) {
+function calculateScore(result: ExtractedAnalyzeResult): number {
   let score = 50;
-  if (r.title) score += 10;
-  if (r.brand) score += 10;
-  if (r.model) score += 10;
-  if (r.category) score += 5;
-  if (r.detectedPrice > 0) score += 15;
+
+  if (result.title) score += 10;
+  if (result.brand) score += 10;
+  if (result.model) score += 10;
+  if (result.category) score += 5;
+  if (result.detectedPrice > 0) score += 15;
+
   return Math.min(100, score);
 }
 
@@ -149,22 +151,17 @@ export async function POST(request: NextRequest) {
     /* ========= AUTH ========= */
 
     const authHeader = request.headers.get("authorization");
-    const token = authHeader?.startsWith("Bearer ")
-      ? authHeader.replace("Bearer ", "")
-      : null;
+    const token =
+      authHeader?.startsWith("Bearer ") ? authHeader.replace("Bearer ", "") : null;
 
     let userId: string | null = null;
 
     if (token) {
-      const {
-        data: { user },
-        error: userError,
-      } = await getUserFromAccessToken(token);
-
-      if (userError) {
-        console.warn("USER LOOKUP FAILED", userError.message);
-      } else {
-        userId = user?.id || null;
+      try {
+        const user = await getUserFromAccessToken(token);
+        userId = user?.id ?? null;
+      } catch (error) {
+        console.warn("USER LOOKUP FAILED", error);
       }
     }
 
@@ -177,10 +174,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Keine Datei" }, { status: 400 });
     }
 
+    const mimeType = file.type || "image/png";
     const buffer = Buffer.from(await file.arrayBuffer());
     const base64 = buffer.toString("base64");
 
     /* ========= OPENAI ========= */
+
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json(
+        { error: "OPENAI_API_KEY fehlt auf dem Server." },
+        { status: 500 }
+      );
+    }
 
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
@@ -219,7 +224,7 @@ Regeln:
               },
               {
                 type: "input_image",
-                image_url: `data:image/png;base64,${base64}`,
+                image_url: `data:${mimeType};base64,${base64}`,
               },
             ],
           },

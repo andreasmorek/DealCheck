@@ -52,7 +52,7 @@ export default function Home() {
         data: { session },
       } = await supabaseClient.auth.getSession();
 
-      const authHeaders = session?.access_token
+      const authHeaders: HeadersInit = session?.access_token
         ? {
             Authorization: `Bearer ${session.access_token}`,
           }
@@ -102,9 +102,11 @@ export default function Home() {
   const usageText = useMemo(() => {
     if (!paywall) return "";
     if (typeof paywall.used !== "number") return "";
+
     if (typeof paywall.limit === "number") {
       return `${paywall.used} von ${paywall.limit} Gratis-Checks verbraucht`;
     }
+
     return `${paywall.used} Checks verbraucht`;
   }, [paywall]);
 
