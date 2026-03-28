@@ -20,7 +20,9 @@ const FREE_LIMIT = 3;
 function getMonthRange() {
   const now = new Date();
   const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  const end = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)
+  );
 
   return {
     start: start.toISOString(),
@@ -35,6 +37,12 @@ export async function getAccessState(): Promise<AccessState> {
     data: { user },
     error: userError,
   } = await supabase.auth.getUser();
+
+  console.log("ACCESS USER", {
+    hasUser: !!user,
+    userId: user?.id ?? null,
+    userError: userError?.message ?? null,
+  });
 
   if (userError || !user) {
     return {
@@ -57,16 +65,17 @@ export async function getAccessState(): Promise<AccessState> {
     .eq("user_id", user.id)
     .maybeSingle();
 
-  if (subscriptionError) {
-    console.error("SUBSCRIPTION READ ERROR", subscriptionError);
-  }
+  console.log("ACCESS SUBSCRIPTION", {
+    userId: user.id,
+    subscription,
+    subscriptionError: subscriptionError?.message ?? null,
+  });
 
   let plan: UserPlan = "free";
 
   if (subscription) {
     const rawPlan = String(subscription.plan || "").toLowerCase();
     const rawStatus = String(subscription.status || "").toLowerCase();
-
     const hasSubscription =
       Boolean(subscription.paypal_subscription_id) ||
       Boolean(subscription.subscription_id);
@@ -102,8 +111,15 @@ export async function getAccessState(): Promise<AccessState> {
       .gte("created_at", start)
       .lt("created_at", end);
 
+    console.log("ACCESS COUNT QUERY", {
+      userId: user.id,
+      start,
+      end,
+      count,
+      error: error?.message ?? null,
+    });
+
     if (error) {
-      console.error("USAGE COUNT ERROR", error);
       used = 0;
     } else {
       used = count ?? 0;
@@ -115,6 +131,14 @@ export async function getAccessState(): Promise<AccessState> {
 
   const remaining = Math.max(FREE_LIMIT - used, 0);
   const allowed = used < FREE_LIMIT;
+
+  console.log("ACCESS RESULT", {
+    userId: user.id,
+    used,
+    remaining,
+    allowed,
+    limit: FREE_LIMIT,
+  });
 
   return {
     authenticated: true,
@@ -140,11 +164,23 @@ export async function registerAnalyzeUsage(userId: string) {
     created_at: new Date().toISOString(),
   };
 
-  const { error } = await supabase.from("analysis_usage").insert(payload);
+  console.log("USAGE INSERT START", payload);
 
-  if (error) {
-    console.error("USAGE TRACKING ERROR", error);
-  } else {
-    console.log("USAGE TRACKING INSERT OK", payload);
-  }
+  const { data, error } = await supabase
+    .from("analysis_usage")
+    .insert(payload)
+    .select();
+
+  console.log("USAGE INSERT RESULT", {
+    payload,
+    data,
+    error: error
+      ? {
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+          code: error.code,
+        }
+      : null,
+  });
 }
