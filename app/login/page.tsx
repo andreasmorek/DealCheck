@@ -2,12 +2,50 @@
 
 import { FormEvent, useMemo, useState } from "react";
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/client";
+import { supabaseClient } from "@/lib/supabase/client";
 
 function getReadableErrorMessage(error: unknown): string {
   if (!error) return "Login konnte nicht gestartet werden.";
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
+
+  if (typeof error === "string") {
+    const lower = error.toLowerCase();
+
+    if (lower.includes("email rate limit exceeded")) {
+      return "Es wurden gerade zu viele Magic-Links angefordert. Bitte warte kurz und versuche es dann erneut.";
+    }
+
+    return error;
+  }
+
+  if (error instanceof Error) {
+    const message = error.message || "Login konnte nicht gestartet werden.";
+    const lower = message.toLowerCase();
+
+    if (lower.includes("email rate limit exceeded")) {
+      return "Es wurden gerade zu viele Magic-Links angefordert. Bitte warte kurz und versuche es dann erneut.";
+    }
+
+    return message;
+  }
+
+  if (typeof error === "object" && error !== null) {
+    const maybeMessage =
+      "message" in error &&
+      typeof (error as { message?: unknown }).message === "string"
+        ? (error as { message: string }).message
+        : "";
+
+    if (maybeMessage) {
+      const lower = maybeMessage.toLowerCase();
+
+      if (lower.includes("email rate limit exceeded")) {
+        return "Es wurden gerade zu viele Magic-Links angefordert. Bitte warte kurz und versuche es dann erneut.";
+      }
+
+      return maybeMessage;
+    }
+  }
+
   return "Login konnte nicht gestartet werden.";
 }
 
@@ -41,20 +79,22 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const supabase = createClient();
+      const baseUrl =
+        typeof window !== "undefined" ? window.location.origin : "";
 
-      const { error } = await supabase.auth.signInWithOtp({
+      const { error } = await supabaseClient.auth.signInWithOtp({
         email: trimmedEmail,
         options: {
-          emailRedirectTo:
-            "https://deal-check-iota.vercel.app/auth/callback?next=/",
+          emailRedirectTo: `${baseUrl}/auth/callback?next=/`,
         },
       });
 
-      if (error) throw error;
+      if (error) {
+        throw error;
+      }
 
       setSuccess(
-        "Magic Link wurde verschickt. Bitte prüfe dein Postfach und klicke auf den Link."
+        "Der Magic Link wurde verschickt. Bitte prüfe jetzt dein E-Mail-Postfach und klicke auf den Anmelde-Link."
       );
       setEmail("");
     } catch (err) {
@@ -93,30 +133,41 @@ export default function LoginPage() {
                 <input
                   id="email"
                   type="email"
+                  inputMode="email"
+                  autoComplete="email"
                   placeholder="name@beispiel.de"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   disabled={loading}
-                  className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white outline-none focus:border-orange-400/40"
+                  className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white outline-none transition placeholder:text-white/35 focus:border-orange-400/40 disabled:cursor-not-allowed disabled:opacity-70"
                 />
               </div>
 
               <button
                 type="submit"
                 disabled={loading || !trimmedEmail}
-                className="w-full rounded-2xl bg-gradient-to-r from-[#ff5a1f] to-[#ff7a1a] px-5 py-3 font-bold"
+                className="inline-flex w-full items-center justify-center rounded-2xl bg-gradient-to-r from-[#ff5a1f] to-[#ff7a1a] px-5 py-3 text-sm font-bold text-white transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-70"
               >
-                {loading ? "Link wird gesendet..." : "Magic Link senden"}
+                {loading ? "Link wird gesendet ..." : "Magic Link senden"}
               </button>
             </form>
 
-            {error && <div className="mt-4 text-sm text-red-400">{error}</div>}
-            {success && (
-              <div className="mt-4 text-sm text-green-400">{success}</div>
-            )}
+            {error ? (
+              <div className="mt-4 rounded-2xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm leading-6 text-rose-200">
+                {error}
+              </div>
+            ) : null}
+
+            {success ? (
+              <div className="mt-4 rounded-2xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-3 text-sm leading-6 text-emerald-200">
+                {success}
+              </div>
+            ) : null}
 
             <div className="mt-6 text-sm text-white/50">
-              <Link href="/">← Zurück zum Deal Check</Link>
+              <Link href="/" className="transition hover:text-white">
+                ← Zurück zum Deal Check
+              </Link>
             </div>
           </div>
         </div>
