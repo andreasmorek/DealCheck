@@ -4,28 +4,89 @@ import { getAccessState, registerAnalyzeUsage } from "@/lib/access";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-type AnalysisResult = {
+type RecommendationLevel = "kaufen" | "beobachten" | "warten";
+
+type FrontendAnalysisResult = {
+  title: string;
+  brand?: string;
+  model?: string;
+  category?: string;
+  detectedPrice: number;
+  currency: string;
+  score: number;
   summary: string;
-  recommendation:
-    | "Kaufen"
-    | "Eher kaufen"
-    | "Beobachten"
-    | "Eher nicht"
-    | "Nicht kaufen";
-  priceRating: string;
-  positives: string[];
-  negatives: string[];
-  confidence: string;
+  recommendation: {
+    level: RecommendationLevel;
+    text: string;
+    reason: string;
+  };
+  priceRating?: string;
+  positives?: string[];
+  negatives?: string[];
+  confidence?: string;
 };
 
 function fileToBase64(buffer: ArrayBuffer) {
   return Buffer.from(buffer).toString("base64");
 }
 
+function normalizeText(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value.trim() : fallback;
+}
+
+function normalizeOptionalText(value: unknown): string | undefined {
+  const text = normalizeText(value);
+  return text ? text : undefined;
+}
+
+function normalizeNumber(value: unknown, fallback = 0): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.replace(",", ".").replace(/[^\d.-]/g, "");
+    const parsed = Number(normalized);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return fallback;
+}
+
+function normalizeScore(value: unknown): number {
+  const score = Math.round(normalizeNumber(value, 0));
+  return Math.min(100, Math.max(0, score));
+}
+
+function normalizeCurrency(value: unknown): string {
+  const currency = normalizeText(value, "EUR").toUpperCase();
+  return currency.length === 3 ? currency : "EUR";
+}
+
+function normalizeRecommendationLevel(value: unknown): RecommendationLevel {
+  const level = normalizeText(value).toLowerCase();
+
+  if (level === "kaufen") return "kaufen";
+  if (level === "beobachten") return "beobachten";
+  if (level === "warten") return "warten";
+
+  return "beobachten";
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 async function runImageAnalysis(
   base64Image: string,
   mimeType: string
-): Promise<AnalysisResult> {
+): Promise<FrontendAnalysisResult> {
   const apiKey = process.env.OPENAI_API_KEY;
 
   if (!apiKey) {
@@ -36,26 +97,25 @@ async function runImageAnalysis(
 Du analysierst einen hochgeladenen Screenshot oder ein Produktbild für eine Deal-Check-App.
 
 Ziel:
-- Erkenne das Produkt / Angebot
-- Schätze ein, ob der Preis attraktiv wirkt
-- Gib eine klare Kaufempfehlung
-- Antworte auf Deutsch
-- Antworte ausschließlich als JSON
+- Erkenne das konkrete Produkt so präzise wie möglich
+- Lies den sichtbaren Preis aus dem Screenshot, wenn vorhanden
+- Bewerte, ob das Angebot attraktiv wirkt
+- Gib einen KI-Score von 0 bis 100
+- Formuliere eine klare, kurze Einschätzung auf Deutsch
+- Antworte ausschließlich als JSON im vorgegebenen Schema
 
-JSON-Schema:
-{
-  "summary": "kurze Zusammenfassung in 2-4 Sätzen",
-  "recommendation": "Kaufen | Eher kaufen | Beobachten | Eher nicht | Nicht kaufen",
-  "priceRating": "z. B. Sehr gut / Gut / Mittel / Eher teuer / Zu teuer",
-  "positives": ["..."],
-  "negatives": ["..."],
-  "confidence": "z. B. hoch / mittel / niedrig"
-}
-
-Wichtig:
-- Bleib vorsichtig, wenn wichtige Daten auf dem Screenshot fehlen.
-- Erfinde keine technischen Fakten.
-- Wenn Preis oder Zustand nicht klar sind, sag das offen.
+Wichtige Regeln:
+- Wenn ein Preis sichtbar ist, trage ihn als Zahl ein, z. B. 24.99
+- Wenn kein Preis sicher erkennbar ist, setze detectedPrice auf 0
+- currency in der Regel "EUR", falls nichts anderes klar erkennbar ist
+- title soll der konkrete Produktname sein, nicht nur "Erkanntes Produkt"
+- brand, model, category nur füllen, wenn sinnvoll erkennbar
+- summary in 2 bis 4 Sätzen
+- recommendation.level darf nur sein: "kaufen", "beobachten", "warten"
+- recommendation.text soll kurz sein, z. B. "Kaufen", "Beobachten" oder "Lieber warten"
+- recommendation.reason soll die Begründung in 1 bis 2 Sätzen liefern
+- score soll eine ganzzahlige Einschätzung von 0 bis 100 sein
+- Erfinde keine harten Fakten, wenn sie im Screenshot nicht erkennbar sind
 `;
 
   const response = await fetch("https://api.openai.com/v1/responses", {
@@ -84,22 +144,32 @@ Wichtig:
       text: {
         format: {
           type: "json_schema",
-          name: "deal_check_analysis",
+          name: "deal_check_analysis_v2",
           strict: true,
           schema: {
             type: "object",
             additionalProperties: false,
             properties: {
+              title: { type: "string" },
+              brand: { type: "string" },
+              model: { type: "string" },
+              category: { type: "string" },
+              detectedPrice: { type: "number" },
+              currency: { type: "string" },
+              score: { type: "number" },
               summary: { type: "string" },
               recommendation: {
-                type: "string",
-                enum: [
-                  "Kaufen",
-                  "Eher kaufen",
-                  "Beobachten",
-                  "Eher nicht",
-                  "Nicht kaufen",
-                ],
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  level: {
+                    type: "string",
+                    enum: ["kaufen", "beobachten", "warten"],
+                  },
+                  text: { type: "string" },
+                  reason: { type: "string" },
+                },
+                required: ["level", "text", "reason"],
               },
               priceRating: { type: "string" },
               positives: {
@@ -113,6 +183,13 @@ Wichtig:
               confidence: { type: "string" },
             },
             required: [
+              "title",
+              "brand",
+              "model",
+              "category",
+              "detectedPrice",
+              "currency",
+              "score",
               "summary",
               "recommendation",
               "priceRating",
@@ -152,12 +229,41 @@ Wichtig:
     throw new Error("Leere Analyse-Antwort erhalten.");
   }
 
+  let parsedInner: any;
   try {
-    return JSON.parse(contentText) as AnalysisResult;
+    parsedInner = JSON.parse(contentText);
   } catch {
     console.error("OPENAI JSON PARSE ERROR", contentText);
     throw new Error("Analyse-JSON konnte nicht verarbeitet werden.");
   }
+
+  const result: FrontendAnalysisResult = {
+    title: normalizeText(parsedInner?.title, "Erkanntes Produkt"),
+    brand: normalizeOptionalText(parsedInner?.brand),
+    model: normalizeOptionalText(parsedInner?.model),
+    category: normalizeOptionalText(parsedInner?.category),
+    detectedPrice: normalizeNumber(parsedInner?.detectedPrice, 0),
+    currency: normalizeCurrency(parsedInner?.currency),
+    score: normalizeScore(parsedInner?.score),
+    summary: normalizeText(parsedInner?.summary, "Keine Zusammenfassung verfügbar."),
+    recommendation: {
+      level: normalizeRecommendationLevel(parsedInner?.recommendation?.level),
+      text: normalizeText(
+        parsedInner?.recommendation?.text,
+        "Beobachten"
+      ),
+      reason: normalizeText(
+        parsedInner?.recommendation?.reason,
+        "Noch keine Begründung vorhanden."
+      ),
+    },
+    priceRating: normalizeOptionalText(parsedInner?.priceRating),
+    positives: normalizeStringArray(parsedInner?.positives),
+    negatives: normalizeStringArray(parsedInner?.negatives),
+    confidence: normalizeOptionalText(parsedInner?.confidence),
+  };
+
+  return result;
 }
 
 export async function POST(req: Request) {
@@ -239,7 +345,10 @@ export async function POST(req: Request) {
     console.log("ANALYZE RESULT", {
       userId: access.userId,
       plan: access.plan,
-      recommendation: analysis.recommendation,
+      title: analysis.title,
+      detectedPrice: analysis.detectedPrice,
+      score: analysis.score,
+      recommendation: analysis.recommendation?.text,
     });
 
     let usage = access.usage;
