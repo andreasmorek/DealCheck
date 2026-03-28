@@ -1,26 +1,71 @@
 import { NextResponse } from "next/server";
-import { getAccessState } from "@/lib/access";
+import { createClient } from "@/lib/supabase/server";
 
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
+const PREMIUM_PLAN_ID = "P-51462856DU6745131NHCBNRA";
 
 export async function GET() {
-  const access = await getAccessState();
+  try {
+    const supabase = await createClient();
 
-  console.log("CHECK-ACCESS DEBUG", {
-    authenticated: access.authenticated,
-    allowed: access.allowed,
-    plan: access.plan,
-    userId: access.userId,
-    usage: access.usage,
-    reason: access.reason || null,
-  });
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
 
-  return NextResponse.json(access, {
-    headers: {
-      "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
-      Pragma: "no-cache",
-      Expires: "0",
-    },
-  });
+    if (userError || !user) {
+      return NextResponse.json({
+        authenticated: false,
+        allowed: false,
+        plan: "free",
+        reason: "Bitte logge dich ein.",
+        userId: null,
+        usage: { used: 0, limit: 3, remaining: 3 },
+      });
+    }
+
+    const { data: subscription, error: subscriptionError } = await supabase
+      .from("subscriptions")
+      .select("user_id, email, paypal_subscription_id, paypal_plan_id")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (subscriptionError) {
+      console.error("CHECK-ACCESS subscription error:", subscriptionError);
+    }
+
+    const isPremium =
+      !!subscription?.paypal_subscription_id &&
+      subscription?.paypal_plan_id === PREMIUM_PLAN_ID;
+
+    const plan = isPremium ? "premium" : "free";
+    const limit = isPremium ? 999999 : 3;
+    const used = 0;
+
+    return NextResponse.json({
+      authenticated: true,
+      allowed: used < limit,
+      plan,
+      reason: used < limit ? null : "Upgrade erforderlich.",
+      userId: user.id,
+      usage: {
+        used,
+        limit,
+        remaining: Math.max(0, limit - used),
+      },
+    });
+  } catch (error) {
+    console.error("CHECK-ACCESS fatal error:", error);
+
+    return NextResponse.json(
+      {
+        authenticated: false,
+        allowed: false,
+        plan: "free",
+        reason: "Fehler bei der Prüfung des Zugangs.",
+        userId: null,
+        usage: { used: 0, limit: 3, remaining: 3 },
+      },
+      { status: 500 }
+    );
+  }
 }

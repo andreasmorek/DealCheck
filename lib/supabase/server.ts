@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 
-export async function createSupabaseServerClient() {
+export async function createClient() {
   const cookieStore = await cookies();
 
   return createServerClient(
@@ -18,7 +18,8 @@ export async function createSupabaseServerClient() {
               cookieStore.set(name, value, options);
             });
           } catch {
-            // In manchen Server-Kontexten kann set fehlschlagen
+            // In manchen Server-Kontexten darf nicht geschrieben werden.
+            // Dann übernimmt Middleware/Route Handler das Setzen.
           }
         },
       },
