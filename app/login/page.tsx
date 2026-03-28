@@ -6,17 +6,12 @@ import { createClient } from "@/lib/supabase/client";
 
 function getReadableErrorMessage(error: unknown): string {
   if (!error) return "Login konnte nicht gestartet werden.";
-
   if (error instanceof Error) return error.message;
-
   if (typeof error === "string") return error;
-
   return "Login konnte nicht gestartet werden.";
 }
 
 export default function LoginPage() {
-  const supabase = createClient();
-  
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -46,6 +41,8 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
+      const supabase = createClient();
+
       const { error } = await supabase.auth.signInWithOtp({
         email: trimmedEmail,
         options: {
@@ -113,10 +110,7 @@ export default function LoginPage() {
               </button>
             </form>
 
-            {error && (
-              <div className="mt-4 text-sm text-red-400">{error}</div>
-            )}
-
+            {error && <div className="mt-4 text-sm text-red-400">{error}</div>}
             {success && (
               <div className="mt-4 text-sm text-green-400">{success}</div>
             )}

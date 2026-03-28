@@ -5,13 +5,11 @@ import { createClient } from "@/lib/supabase/client";
 import PayPalSubscribeButton from "@/components/PayPalSubscribeButton";
 
 type AccessResponse = {
-  authenticated: boolean;
-  plan: string;
+  authenticated?: boolean;
+  plan?: string;
 };
 
 export default function UpgradePage() {
-  const supabase = createClient();
-
   const [userId, setUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [checkingAccess, setCheckingAccess] = useState(true);
@@ -26,6 +24,8 @@ export default function UpgradePage() {
         setCheckingAccess(true);
         setError(null);
 
+        const supabase = createClient();
+
         const {
           data: { session },
           error: sessionError,
@@ -34,14 +34,14 @@ export default function UpgradePage() {
         if (!active) return;
 
         if (sessionError) {
-          console.error("SESSION ERROR", sessionError);
+          console.error("UPGRADE SESSION ERROR", sessionError);
           setError("Sitzung konnte nicht geladen werden.");
           setLoading(false);
           setCheckingAccess(false);
           return;
         }
 
-        const currentUserId = session?.user?.id || null;
+        const currentUserId = session?.user?.id ?? null;
         setUserId(currentUserId);
 
         if (!session) {
@@ -50,16 +50,20 @@ export default function UpgradePage() {
           return;
         }
 
-        // 🔥 check-access prüfen
         const res = await fetch("/api/check-access", {
+          method: "GET",
           cache: "no-store",
         });
 
-        const data: AccessResponse = await res.json();
+        const accessData: AccessResponse = await res.json();
 
         if (!active) return;
 
-        if (data.authenticated && data.plan === "premium") {
+        if (
+          res.ok &&
+          accessData.authenticated &&
+          accessData.plan === "premium"
+        ) {
           window.location.href = "/?upgraded=1";
           return;
         }
@@ -67,7 +71,7 @@ export default function UpgradePage() {
         setLoading(false);
         setCheckingAccess(false);
       } catch (err) {
-        console.error("UPGRADE ERROR", err);
+        console.error("UPGRADE INIT ERROR", err);
         if (!active) return;
         setError("Upgrade-Status konnte nicht geprüft werden.");
         setLoading(false);
@@ -80,7 +84,7 @@ export default function UpgradePage() {
     return () => {
       active = false;
     };
-  }, [supabase]);
+  }, []);
 
   if (loading || checkingAccess) {
     return (
@@ -106,7 +110,8 @@ export default function UpgradePage() {
               Mehr Preischecks freischalten
             </h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-white/70">
-              Unbegrenzte Checks und sofortige Freischaltung nach Kauf.
+              Unbegrenzte Checks, sauberer Preisvergleich und direkte
+              Freischaltung nach erfolgreicher Zahlung.
             </p>
           </div>
 
@@ -117,6 +122,7 @@ export default function UpgradePage() {
               <ul className="mt-4 space-y-3 text-sm text-white/75">
                 <li>3 Preischecks gratis</li>
                 <li>Login per Magic Link</li>
+                <li>Ideal zum Testen</li>
               </ul>
             </div>
 
@@ -125,23 +131,30 @@ export default function UpgradePage() {
               <p className="mt-2 text-3xl font-black">3,99 € / Monat</p>
               <ul className="mt-4 space-y-3 text-sm text-white/85">
                 <li>Unbegrenzte Preischecks</li>
-                <li>Sofort freigeschaltet</li>
+                <li>Voller Zugriff auf DealCheck</li>
+                <li>Sofortige Freischaltung nach Kauf</li>
               </ul>
 
               <div className="mt-6">
                 {error ? (
-                  <div className="text-red-400">{error}</div>
+                  <div className="rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+                    {error}
+                  </div>
                 ) : userId ? (
                   <PayPalSubscribeButton userId={userId} />
                 ) : (
                   <a
                     href="/login"
-                    className="inline-flex items-center justify-center rounded-2xl bg-white px-5 py-3 font-bold text-black"
+                    className="inline-flex items-center justify-center rounded-2xl bg-white px-5 py-3 text-sm font-bold text-black transition hover:scale-[1.01]"
                   >
                     Bitte zuerst einloggen
                   </a>
                 )}
               </div>
+
+              <p className="mt-4 text-xs leading-5 text-white/50">
+                Das Upgrade wird deinem Benutzerkonto direkt zugeordnet.
+              </p>
             </div>
           </div>
         </div>

@@ -1,8 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
-const PREMIUM_PLAN_ID = "P-51462856DU6745131NHCBNRA";
-
 export async function GET() {
   try {
     const supabase = await createClient();
@@ -25,7 +23,7 @@ export async function GET() {
 
     const { data: subscription, error: subscriptionError } = await supabase
       .from("subscriptions")
-      .select("user_id, email, paypal_subscription_id, paypal_plan_id")
+      .select("user_id, plan, status, provider")
       .eq("user_id", user.id)
       .maybeSingle();
 
@@ -34,8 +32,8 @@ export async function GET() {
     }
 
     const isPremium =
-      !!subscription?.paypal_subscription_id &&
-      subscription?.paypal_plan_id === PREMIUM_PLAN_ID;
+      subscription?.status === "active" &&
+      subscription?.plan === "premium";
 
     const plan = isPremium ? "premium" : "free";
     const limit = isPremium ? 999999 : 3;

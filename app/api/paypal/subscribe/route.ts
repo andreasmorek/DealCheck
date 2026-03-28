@@ -5,21 +5,10 @@ import {
   fetchPaypalSubscription,
   mapPaypalPlanToInternalPlan,
   mapPaypalStatusToInternalStatus,
+  type PaypalSubscriptionResponse,
 } from "@/lib/paypal";
 
 export const runtime = "nodejs";
-
-type PaypalSubscription = {
-  id?: string | null;
-  plan_id?: string | null;
-  status?: string | null;
-  subscriber?: {
-    email_address?: string | null;
-  } | null;
-  billing_info?: {
-    next_billing_time?: string | null;
-  } | null;
-};
 
 function normalizeString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -34,30 +23,31 @@ function normalizeEmail(value: unknown): string | null {
 function buildSubscriptionRecord(
   userId: string,
   subscriptionId: string,
-  paypalSubscription: PaypalSubscription
+  paypalSubscription: PaypalSubscriptionResponse
 ) {
   const resolvedSubscriptionId =
     normalizeString(paypalSubscription.id) ?? subscriptionId;
 
-  const plan = mapPaypalPlanToInternalPlan(paypalSubscription.plan_id ?? null);
-  const status = mapPaypalStatusToInternalStatus(paypalSubscription.status ?? null);
+  const plan = mapPaypalPlanToInternalPlan(
+    normalizeString(paypalSubscription.plan_id)
+  );
+
+  const status = mapPaypalStatusToInternalStatus(
+    normalizeString(paypalSubscription.status)
+  );
 
   return {
-    record: {
-      user_id: userId,
-      provider: "paypal",
-      plan,
-      status,
-      subscription_id: resolvedSubscriptionId,
-      paypal_subscription_id: resolvedSubscriptionId,
-      paypal_plan_id: normalizeString(paypalSubscription.plan_id),
-      paypal_email: normalizeEmail(paypalSubscription.subscriber?.email_address),
-      current_period_end:
-        normalizeString(paypalSubscription.billing_info?.next_billing_time),
-      updated_at: new Date().toISOString(),
-    },
+    user_id: userId,
+    provider: "paypal",
     plan,
     status,
+    subscription_id: resolvedSubscriptionId,
+    paypal_subscription_id: resolvedSubscriptionId,
+    paypal_plan_id: normalizeString(paypalSubscription.plan_id),
+    paypal_email: normalizeEmail(paypalSubscription.subscriber?.email_address),
+    current_period_end:
+      normalizeString(paypalSubscription.billing_info?.next_billing_time),
+    updated_at: new Date().toISOString(),
   };
 }
 
@@ -71,10 +61,7 @@ export async function POST(request: NextRequest) {
     } = await supabase.auth.getUser();
 
     if (authError || !user) {
-      return NextResponse.json(
-        { error: "Nicht eingeloggt." },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Nicht eingeloggt." }, { status: 401 });
     }
 
     const body = await request.json().catch(() => null);
@@ -87,25 +74,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const paypalSubscription = (await fetchPaypalSubscription(
-      subscriptionId
-    )) as PaypalSubscription;
+    const paypalSubscription = await fetchPaypalSubscription(subscriptionId);
 
-    console.log("PAYPAL SUBSCRIBE SYNC", {
-      userId: user.id,
-      subscriptionId,
-      paypalSubscriptionId: normalizeString(paypalSubscription.id),
-      paypalPlanId: normalizeString(paypalSubscription.plan_id),
-      paypalStatus: normalizeString(paypalSubscription.status),
-      paypalEmail: normalizeEmail(paypalSubscription.subscriber?.email_address),
-    });
-
-    const admin = createSupabaseAdminClient();
-    const { record, plan, status } = buildSubscriptionRecord(
+    const record = buildSubscriptionRecord(
       user.id,
       subscriptionId,
       paypalSubscription
     );
+
+    const admin = createSupabaseAdminClient();
 
     const { error: upsertError } = await admin
       .from("subscriptions")
@@ -121,10 +98,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       ok: true,
-      plan,
-      status,
-      sourceOfTruth: "webhook",
       synced: true,
+      plan: record.plan,
+      status: record.status,
     });
   } catch (error) {
     console.error("PAYPAL SUBSCRIBE ERROR", error);

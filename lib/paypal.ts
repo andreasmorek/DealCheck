@@ -1,55 +1,41 @@
-export type InternalPlan = "free" | "pro";
-export type InternalSubscriptionStatus =
-  | "pending"
-  | "trialing"
-  | "active"
-  | "paused"
-  | "canceled"
-  | "inactive";
+const PAYPAL_API_BASE =
+  process.env.PAYPAL_ENV === "live"
+    ? "https://api-m.paypal.com"
+    : "https://api-m.sandbox.paypal.com";
 
-export type PayPalSubscription = {
-  id?: string;
-  status?: string;
-  plan_id?: string;
-  custom_id?: string;
-  subscriber?: {
-    email_address?: string;
-  };
-  billing_info?: {
-    next_billing_time?: string;
-    last_payment?: {
-      time?: string;
-      amount?: {
-        value?: string;
-        currency_code?: string;
-      };
-    };
-    failed_payments_count?: number;
-  };
-  create_time?: string;
-  update_time?: string;
+const DEALCHECK_PREMIUM_PLAN_ID = "P-51462856DU6745131NHCBNRA";
+
+type PaypalAccessTokenResponse = {
+  access_token: string;
 };
 
-function requiredEnv(name: string) {
+export type PaypalSubscriptionResponse = {
+  id?: string | null;
+  plan_id?: string | null;
+  status?: string | null;
+  subscriber?: {
+    email_address?: string | null;
+  } | null;
+  billing_info?: {
+    next_billing_time?: string | null;
+  } | null;
+};
+
+function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) {
-    throw new Error(`${name} fehlt.`);
+    throw new Error(`Missing environment variable: ${name}`);
   }
   return value;
 }
 
-export function getPaypalBaseUrl() {
-  return process.env.PAYPAL_ENV === "live"
-    ? "https://api-m.paypal.com"
-    : "https://api-m.sandbox.paypal.com";
-}
+export async function getPaypalAccessToken(): Promise<string> {
+  const clientId = requireEnv("PAYPAL_CLIENT_ID");
+  const clientSecret = requireEnv("PAYPAL_CLIENT_SECRET");
 
-export async function getPaypalAccessToken() {
-  const clientId = requiredEnv("PAYPAL_CLIENT_ID");
-  const clientSecret = requiredEnv("PAYPAL_CLIENT_SECRET");
   const auth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
 
-  const response = await fetch(`${getPaypalBaseUrl()}/v1/oauth2/token`, {
+  const response = await fetch(`${PAYPAL_API_BASE}/v1/oauth2/token`, {
     method: "POST",
     headers: {
       Authorization: `Basic ${auth}`,
@@ -59,20 +45,26 @@ export async function getPaypalAccessToken() {
     cache: "no-store",
   });
 
-  const data = await response.json().catch(() => null);
-
-  if (!response.ok || !data?.access_token) {
-    throw new Error(`PayPal Token Fehler: ${JSON.stringify(data)}`);
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`PayPal token error: ${response.status} ${text}`);
   }
 
-  return data.access_token as string;
+  const data = (await response.json()) as PaypalAccessTokenResponse;
+  if (!data.access_token) {
+    throw new Error("PayPal access token missing.");
+  }
+
+  return data.access_token;
 }
 
-export async function fetchPaypalSubscription(subscriptionId: string) {
+export async function fetchPaypalSubscription(
+  subscriptionId: string
+): Promise<PaypalSubscriptionResponse> {
   const accessToken = await getPaypalAccessToken();
 
   const response = await fetch(
-    `${getPaypalBaseUrl()}/v1/billing/subscriptions/${subscriptionId}`,
+    `${PAYPAL_API_BASE}/v1/billing/subscriptions/${subscriptionId}`,
     {
       method: "GET",
       headers: {
@@ -83,78 +75,30 @@ export async function fetchPaypalSubscription(subscriptionId: string) {
     }
   );
 
-  const data = (await response.json().catch(() => null)) as PayPalSubscription | null;
-
-  if (!response.ok || !data) {
-    throw new Error(`PayPal Subscription Lookup Fehler: ${JSON.stringify(data)}`);
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(
+      `PayPal subscription fetch failed: ${response.status} ${text}`
+    );
   }
 
-  return data;
+  return (await response.json()) as PaypalSubscriptionResponse;
 }
 
-export function mapPaypalPlanToInternalPlan(paypalPlanId?: string | null): InternalPlan {
-  return paypalPlanId === process.env.PAYPAL_PRO_PLAN_ID ? "pro" : "free";
+export function mapPaypalPlanToInternalPlan(
+  paypalPlanId: string | null | undefined
+): "free" | "premium" {
+  if (!paypalPlanId) return "free";
+  return paypalPlanId === DEALCHECK_PREMIUM_PLAN_ID ? "premium" : "free";
 }
 
 export function mapPaypalStatusToInternalStatus(
-  paypalStatus?: string | null
-): InternalSubscriptionStatus {
-  switch (String(paypalStatus || "").toUpperCase()) {
-    case "ACTIVE":
-      return "active";
-    case "APPROVAL_PENDING":
-    case "APPROVED":
-      return "pending";
-    case "SUSPENDED":
-      return "paused";
-    case "CANCELLED":
-    case "EXPIRED":
-      return "canceled";
-    case "CREATED":
-      return "pending";
-    default:
-      return "inactive";
-  }
-}
+  paypalStatus: string | null | undefined
+): "active" | "inactive" | "cancelled" | "suspended" {
+  const value = (paypalStatus ?? "").toUpperCase();
 
-export async function verifyPaypalWebhookSignature({
-  headers,
-  body,
-}: {
-  headers: Headers;
-  body: unknown;
-}) {
-  const webhookId = requiredEnv("PAYPAL_WEBHOOK_ID");
-  const accessToken = await getPaypalAccessToken();
-
-  const verificationPayload = {
-    auth_algo: headers.get("paypal-auth-algo"),
-    cert_url: headers.get("paypal-cert-url"),
-    transmission_id: headers.get("paypal-transmission-id"),
-    transmission_sig: headers.get("paypal-transmission-sig"),
-    transmission_time: headers.get("paypal-transmission-time"),
-    webhook_id: webhookId,
-    webhook_event: body,
-  };
-
-  const response = await fetch(
-    `${getPaypalBaseUrl()}/v1/notifications/verify-webhook-signature`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(verificationPayload),
-      cache: "no-store",
-    }
-  );
-
-  const data = await response.json().catch(() => null);
-
-  if (!response.ok) {
-    throw new Error(`PayPal Webhook-Verifikation fehlgeschlagen: ${JSON.stringify(data)}`);
-  }
-
-  return String(data?.verification_status || "").toUpperCase() === "SUCCESS";
+  if (value === "ACTIVE" || value === "APPROVED") return "active";
+  if (value === "SUSPENDED") return "suspended";
+  if (value === "CANCELLED" || value === "EXPIRED") return "cancelled";
+  return "inactive";
 }
