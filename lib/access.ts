@@ -1,0 +1,141 @@
+import { createSupabaseServerClient } from "@/lib/supabase/server";
+
+export type UserPlan = "free" | "pro";
+
+export type AccessState = {
+  authenticated: boolean;
+  allowed: boolean;
+  plan: UserPlan;
+  reason?: string;
+  userId: string | null;
+  usage: {
+    used: number;
+    limit: number | null;
+    remaining: number | null;
+  };
+};
+
+const FREE_LIMIT = 3;
+
+// 👉 Monatsbereich für Usage
+function getMonthRange() {
+  const now = new Date();
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+
+export async function getAccessState(): Promise<AccessState> {
+  const supabase = await createSupabaseServerClient();
+
+  // 👉 USER holen
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+
+  if (userError || !user) {
+    return {
+      authenticated: false,
+      allowed: false,
+      plan: "free",
+      reason: "Bitte logge dich ein.",
+      userId: null,
+      usage: {
+        used: 0,
+        limit: FREE_LIMIT,
+        remaining: FREE_LIMIT,
+      },
+    };
+  }
+
+  // 👉 SUBSCRIPTION laden
+  const { data: subscription } = await supabase
+    .from("subscriptions")
+    .select("plan, status, subscription_id, paypal_subscription_id")
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  let plan: UserPlan = "free";
+
+  if (subscription) {
+    const rawPlan = String(subscription.plan || "").toLowerCase();
+    const rawStatus = String(subscription.status || "").toLowerCase();
+
+    const hasSubscription =
+      Boolean(subscription.paypal_subscription_id) ||
+      Boolean(subscription.subscription_id);
+
+    // 👉 Hauptlogik
+    if (rawStatus === "active" && (rawPlan === "pro" || hasSubscription)) {
+      plan = "pro";
+    }
+  }
+
+  // 👉 PRO → immer erlaubt
+  if (plan === "pro") {
+    return {
+      authenticated: true,
+      allowed: true,
+      plan,
+      userId: user.id,
+      usage: {
+        used: 0,
+        limit: null,
+        remaining: null,
+      },
+    };
+  }
+
+  // 👉 FREE → Usage prüfen
+  let used = 0;
+
+  try {
+    const { start, end } = getMonthRange();
+
+    const { count } = await supabase
+      .from("usage_tracking")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", user.id)
+      .eq("event_type", "analyze")
+      .gte("created_at", start)
+      .lt("created_at", end);
+
+    used = count ?? 0;
+  } catch {
+    used = 0;
+  }
+
+  const remaining = Math.max(FREE_LIMIT - used, 0);
+  const allowed = used < FREE_LIMIT;
+
+  return {
+    authenticated: true,
+    allowed,
+    plan: "free",
+    reason: allowed
+      ? undefined
+      : "Upgrade erforderlich. Dein Free-Limit ist erreicht.",
+    userId: user.id,
+    usage: {
+      used,
+      limit: FREE_LIMIT,
+      remaining,
+    },
+  };
+}
+
+// 👉 Usage registrieren
+export async function registerAnalyzeUsage(userId: string) {
+  const supabase = await createSupabaseServerClient();
+
+  const { error } = await supabase.from("usage_tracking").insert({
+    user_id: userId,
+    event_type: "analyze",
+    created_at: new Date().toISOString(),
+  });
+
+  if (error) {
+    console.error("USAGE TRACKING ERROR", error);
+  }
+}
