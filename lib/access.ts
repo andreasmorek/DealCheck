@@ -17,7 +17,6 @@ export type AccessState = {
 
 const FREE_LIMIT = 3;
 
-// 👉 Monatsbereich für Usage
 function getMonthRange() {
   const now = new Date();
   const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
@@ -28,7 +27,6 @@ function getMonthRange() {
 export async function getAccessState(): Promise<AccessState> {
   const supabase = await createSupabaseServerClient();
 
-  // 👉 USER holen
   const {
     data: { user },
     error: userError,
@@ -49,7 +47,6 @@ export async function getAccessState(): Promise<AccessState> {
     };
   }
 
-  // 👉 SUBSCRIPTION laden
   const { data: subscription } = await supabase
     .from("subscriptions")
     .select("plan, status, subscription_id, paypal_subscription_id")
@@ -66,13 +63,11 @@ export async function getAccessState(): Promise<AccessState> {
       Boolean(subscription.paypal_subscription_id) ||
       Boolean(subscription.subscription_id);
 
-    // 👉 Hauptlogik
     if (rawStatus === "active" && (rawPlan === "pro" || hasSubscription)) {
       plan = "pro";
     }
   }
 
-  // 👉 PRO → immer erlaubt
   if (plan === "pro") {
     return {
       authenticated: true,
@@ -87,22 +82,27 @@ export async function getAccessState(): Promise<AccessState> {
     };
   }
 
-  // 👉 FREE → Usage prüfen
   let used = 0;
 
   try {
     const { start, end } = getMonthRange();
 
-    const { count } = await supabase
-      .from("usage_tracking")
+    const { count, error } = await supabase
+      .from("analysis_usage")
       .select("*", { count: "exact", head: true })
       .eq("user_id", user.id)
       .eq("event_type", "analyze")
       .gte("created_at", start)
       .lt("created_at", end);
 
-    used = count ?? 0;
-  } catch {
+    if (error) {
+      console.error("USAGE COUNT ERROR", error);
+      used = 0;
+    } else {
+      used = count ?? 0;
+    }
+  } catch (error) {
+    console.error("USAGE COUNT CATCH", error);
     used = 0;
   }
 
@@ -125,11 +125,10 @@ export async function getAccessState(): Promise<AccessState> {
   };
 }
 
-// 👉 Usage registrieren
 export async function registerAnalyzeUsage(userId: string) {
   const supabase = await createSupabaseServerClient();
 
-  const { error } = await supabase.from("usage_tracking").insert({
+  const { error } = await supabase.from("analysis_usage").insert({
     user_id: userId,
     event_type: "analyze",
     created_at: new Date().toISOString(),
