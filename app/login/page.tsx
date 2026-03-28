@@ -2,7 +2,7 @@
 
 import { FormEvent, useMemo, useState } from "react";
 import Link from "next/link";
-import { supabaseClient } from "@/lib/supabase/client";
+import { createClient } from "@/lib/supabase/client";
 
 function getReadableErrorMessage(error: unknown): string {
   if (!error) return "Login konnte nicht gestartet werden.";
@@ -15,6 +15,8 @@ function getReadableErrorMessage(error: unknown): string {
 }
 
 export default function LoginPage() {
+  const supabase = createClient();
+  
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -44,7 +46,7 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const { error } = await supabaseClient.auth.signInWithOtp({
+      const { error } = await supabase.auth.signInWithOtp({
         email: trimmedEmail,
         options: {
           emailRedirectTo:

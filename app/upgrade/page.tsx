@@ -1,22 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { supabaseClient } from "@/lib/supabase/client";
+import { createClient } from "@/lib/supabase/client";
 import PayPalSubscribeButton from "@/components/PayPalSubscribeButton";
 
 type AccessResponse = {
-  allowed: boolean;
-  reason?: string;
-  plan?: string;
-  used?: number;
-  limit?: number | null;
-  authenticated?: boolean;
-  upgradeRequired?: boolean;
-  upgradeUrl?: string | null;
-  loginUrl?: string | null;
+  authenticated: boolean;
+  plan: string;
 };
 
 export default function UpgradePage() {
+  const supabase = createClient();
+
   const [userId, setUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [checkingAccess, setCheckingAccess] = useState(true);
@@ -34,12 +29,12 @@ export default function UpgradePage() {
         const {
           data: { session },
           error: sessionError,
-        } = await supabaseClient.auth.getSession();
+        } = await supabase.auth.getSession();
 
         if (!active) return;
 
         if (sessionError) {
-          console.error("UPGRADE SESSION ERROR", sessionError);
+          console.error("SESSION ERROR", sessionError);
           setError("Sitzung konnte nicht geladen werden.");
           setLoading(false);
           setCheckingAccess(false);
@@ -49,25 +44,22 @@ export default function UpgradePage() {
         const currentUserId = session?.user?.id || null;
         setUserId(currentUserId);
 
-        if (!session?.access_token) {
+        if (!session) {
           setLoading(false);
           setCheckingAccess(false);
           return;
         }
 
+        // 🔥 check-access prüfen
         const res = await fetch("/api/check-access", {
-          method: "GET",
           cache: "no-store",
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-          },
         });
 
-        const accessData: AccessResponse = await res.json();
+        const data: AccessResponse = await res.json();
 
         if (!active) return;
 
-        if (res.ok && accessData.authenticated && accessData.plan === "pro") {
+        if (data.authenticated && data.plan === "premium") {
           window.location.href = "/?upgraded=1";
           return;
         }
@@ -75,7 +67,7 @@ export default function UpgradePage() {
         setLoading(false);
         setCheckingAccess(false);
       } catch (err) {
-        console.error("UPGRADE INIT ERROR", err);
+        console.error("UPGRADE ERROR", err);
         if (!active) return;
         setError("Upgrade-Status konnte nicht geprüft werden.");
         setLoading(false);
@@ -88,7 +80,7 @@ export default function UpgradePage() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [supabase]);
 
   if (loading || checkingAccess) {
     return (
@@ -114,8 +106,7 @@ export default function UpgradePage() {
               Mehr Preischecks freischalten
             </h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-white/70">
-              Unbegrenzte Checks, sauberer Preisvergleich und direkte
-              Freischaltung nach erfolgreicher Zahlung.
+              Unbegrenzte Checks und sofortige Freischaltung nach Kauf.
             </p>
           </div>
 
@@ -126,39 +117,31 @@ export default function UpgradePage() {
               <ul className="mt-4 space-y-3 text-sm text-white/75">
                 <li>3 Preischecks gratis</li>
                 <li>Login per Magic Link</li>
-                <li>Ideal zum Testen</li>
               </ul>
             </div>
 
             <div className="rounded-[24px] border border-orange-400/20 bg-gradient-to-br from-[#ff5a1f]/20 to-[#ff7a1a]/5 p-6">
-              <p className="text-sm text-orange-100/75">Pro</p>
+              <p className="text-sm text-orange-100/75">Premium</p>
               <p className="mt-2 text-3xl font-black">3,99 € / Monat</p>
               <ul className="mt-4 space-y-3 text-sm text-white/85">
                 <li>Unbegrenzte Preischecks</li>
-                <li>Voller Zugriff auf DealCheck</li>
-                <li>Sofortige Freischaltung nach Kauf</li>
+                <li>Sofort freigeschaltet</li>
               </ul>
 
               <div className="mt-6">
                 {error ? (
-                  <div className="rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-                    {error}
-                  </div>
+                  <div className="text-red-400">{error}</div>
                 ) : userId ? (
                   <PayPalSubscribeButton userId={userId} />
                 ) : (
                   <a
                     href="/login"
-                    className="inline-flex items-center justify-center rounded-2xl bg-white px-5 py-3 text-sm font-bold text-black transition hover:scale-[1.01]"
+                    className="inline-flex items-center justify-center rounded-2xl bg-white px-5 py-3 font-bold text-black"
                   >
                     Bitte zuerst einloggen
                   </a>
                 )}
               </div>
-
-              <p className="mt-4 text-xs leading-5 text-white/50">
-                Das Upgrade wird deinem Benutzerkonto direkt zugeordnet.
-              </p>
             </div>
           </div>
         </div>

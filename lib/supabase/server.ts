@@ -18,11 +18,12 @@ export async function createClient() {
               cookieStore.set(name, value, options);
             });
           } catch {
-            // In manchen Server-Kontexten darf nicht geschrieben werden.
-            // Dann übernimmt Middleware/Route Handler das Setzen.
+            // ignore in contexts where cookies can't be set
           }
         },
       },
     }
   );
 }
+
+export const createSupabaseServerClient = createClient;
