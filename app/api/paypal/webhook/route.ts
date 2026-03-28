@@ -5,34 +5,25 @@ import {
   mapPaypalPlanToInternalPlan,
   mapPaypalStatusToInternalStatus,
   verifyPaypalWebhookSignature,
+  type PaypalSubscriptionResponse,
 } from "@/lib/paypal";
 
 export const runtime = "nodejs";
 
-type PaypalSubscription = {
-  id?: string | null;
-  custom_id?: string | null;
-  plan_id?: string | null;
-  status?: string | null;
-  subscriber?: {
-    email_address?: string | null;
-  } | null;
-  billing_info?: {
-    next_billing_time?: string | null;
+type PaypalWebhookEvent = {
+  event_type?: string | null;
+  resource?: {
+    id?: string | null;
+    plan_id?: string | null;
+    status?: string | null;
+    subscriber?: {
+      email_address?: string | null;
+    } | null;
+    billing_info?: {
+      next_billing_time?: string | null;
+    } | null;
   } | null;
 };
-
-function extractSubscriptionId(eventBody: any): string | null {
-  const candidate =
-    eventBody?.resource?.id ||
-    eventBody?.resource?.subscription_id ||
-    eventBody?.resource?.billing_agreement_id ||
-    null;
-
-  return typeof candidate === "string" && candidate.trim()
-    ? candidate.trim()
-    : null;
-}
 
 function normalizeString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -44,126 +35,81 @@ function normalizeEmail(value: unknown): string | null {
     : null;
 }
 
-async function resolveUserId(
-  admin: ReturnType<typeof createSupabaseAdminClient>,
-  subscriptionId: string,
-  customId: string | null
-): Promise<string | null> {
-  if (customId) {
-    return customId;
-  }
-
-  const { data, error } = await admin
-    .from("subscriptions")
-    .select("user_id")
-    .eq("paypal_subscription_id", subscriptionId)
-    .maybeSingle();
-
-  if (error) {
-    console.error("WEBHOOK LOOKUP BY SUBSCRIPTION FAILED", error);
-    return null;
-  }
-
-  return normalizeString(data?.user_id);
-}
-
-function buildSubscriptionPayload(
+function buildRecordFromSubscription(
   userId: string,
-  subscriptionId: string,
-  paypalSubscription: PaypalSubscription
+  subscription: PaypalSubscriptionResponse
 ) {
-  const plan = mapPaypalPlanToInternalPlan(paypalSubscription.plan_id ?? null);
-  const status = mapPaypalStatusToInternalStatus(paypalSubscription.status ?? null);
+  const subscriptionId = normalizeString(subscription.id);
+
+  if (!subscriptionId) {
+    throw new Error("PayPal subscription id missing.");
+  }
 
   return {
-    record: {
-      user_id: userId,
-      provider: "paypal",
-      plan,
-      status,
-      subscription_id: paypalSubscription.id ?? subscriptionId,
-      paypal_subscription_id: paypalSubscription.id ?? subscriptionId,
-      paypal_plan_id: paypalSubscription.plan_id ?? null,
-      paypal_email: normalizeEmail(paypalSubscription.subscriber?.email_address),
-      current_period_end: paypalSubscription.billing_info?.next_billing_time ?? null,
-      updated_at: new Date().toISOString(),
-    },
-    plan,
-    status,
+    user_id: userId,
+    provider: "paypal",
+    plan: mapPaypalPlanToInternalPlan(normalizeString(subscription.plan_id)),
+    status: mapPaypalStatusToInternalStatus(normalizeString(subscription.status)),
+    subscription_id: subscriptionId,
+    paypal_subscription_id: subscriptionId,
+    paypal_plan_id: normalizeString(subscription.plan_id),
+    paypal_email: normalizeEmail(subscription.subscriber?.email_address),
+    current_period_end:
+      normalizeString(subscription.billing_info?.next_billing_time),
+    updated_at: new Date().toISOString(),
   };
-}
-
-export async function GET() {
-  return NextResponse.json({
-    ok: true,
-    route: "paypal-webhook-live",
-    method: "GET",
-  });
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    const rawBody = await request.text();
+    const body = rawBody ? (JSON.parse(rawBody) as PaypalWebhookEvent) : {};
 
-    const isValid = await verifyPaypalWebhookSignature({
-      headers: request.headers,
+    const isVerified = await verifyPaypalWebhookSignature({
+      headers: {
+        transmissionId: request.headers.get("paypal-transmission-id"),
+        transmissionTime: request.headers.get("paypal-transmission-time"),
+        transmissionSig: request.headers.get("paypal-transmission-sig"),
+        authAlgo: request.headers.get("paypal-auth-algo"),
+        certUrl: request.headers.get("paypal-cert-url"),
+      },
       body,
     });
 
-    if (!isValid) {
-      console.error("PAYPAL WEBHOOK INVALID SIGNATURE");
+    if (!isVerified) {
       return NextResponse.json(
-        { error: "Ungültige Signatur." },
+        { error: "Ungültige Webhook-Signatur." },
         { status: 400 }
       );
     }
 
-    const eventType = normalizeString(body?.event_type);
-    const subscriptionId = extractSubscriptionId(body);
+    const subscriptionId =
+      normalizeString(body.resource?.id) ??
+      normalizeString((body as { id?: unknown }).id);
 
     if (!subscriptionId) {
-      return NextResponse.json({
-        ok: true,
-        ignored: true,
-        reason: "no_subscription_id",
-      });
+      return NextResponse.json({ ok: true, ignored: true });
     }
 
-    const paypalSubscription = (await fetchPaypalSubscription(
-      subscriptionId
-    )) as PaypalSubscription;
-
-    const customId = normalizeString(paypalSubscription.custom_id);
     const admin = createSupabaseAdminClient();
 
-    console.log("PAYPAL WEBHOOK RECEIVED", {
-      eventType,
-      subscriptionId,
-      customId,
-      paypalEmail: normalizeEmail(paypalSubscription.subscriber?.email_address),
-      paypalPlanId: normalizeString(paypalSubscription.plan_id),
-      paypalStatus: normalizeString(paypalSubscription.status),
-    });
+    const { data: existingBySubId, error: lookupError } = await admin
+      .from("subscriptions")
+      .select("user_id")
+      .eq("paypal_subscription_id", subscriptionId)
+      .maybeSingle();
 
-    const userId = await resolveUserId(admin, subscriptionId, customId);
-
-    if (!userId) {
-      console.error("WEBHOOK USER NOT RESOLVED", {
-        eventType,
-        subscriptionId,
-        customId,
-      });
-
-      return NextResponse.json({
-        ok: true,
-        ignored: true,
-        reason: "user_not_resolved",
-      });
+    if (lookupError) {
+      console.error("WEBHOOK LOOKUP ERROR", lookupError);
     }
 
-    const { record, plan, status } = buildSubscriptionPayload(
-      userId,
-      subscriptionId,
+    if (!existingBySubId?.user_id) {
+      return NextResponse.json({ ok: true, ignored: true, reason: "unknown_user" });
+    }
+
+    const paypalSubscription = await fetchPaypalSubscription(subscriptionId);
+    const record = buildRecordFromSubscription(
+      existingBySubId.user_id,
       paypalSubscription
     );
 
@@ -172,20 +118,20 @@ export async function POST(request: NextRequest) {
       .upsert(record, { onConflict: "user_id" });
 
     if (upsertError) {
-      console.error("WEBHOOK UPSERT FAILED", upsertError);
+      console.error("WEBHOOK UPSERT ERROR", upsertError);
       return NextResponse.json(
-        { error: "Webhook-Upsert fehlgeschlagen." },
+        { error: "Webhook konnte nicht gespeichert werden." },
         { status: 500 }
       );
     }
 
     return NextResponse.json({
       ok: true,
-      eventType,
-      userId,
+      synced: true,
       subscriptionId,
-      plan,
-      status,
+      plan: record.plan,
+      status: record.status,
+      eventType: body.event_type ?? null,
     });
   } catch (error) {
     console.error("PAYPAL WEBHOOK ERROR", error);
@@ -193,7 +139,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         error:
-          error instanceof Error ? error.message : "Webhook fehlgeschlagen.",
+          error instanceof Error
+            ? error.message
+            : "Webhook konnte nicht verarbeitet werden.",
       },
       { status: 500 }
     );
