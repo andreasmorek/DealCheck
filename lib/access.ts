@@ -21,7 +21,11 @@ function getMonthRange() {
   const now = new Date();
   const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
   const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
-  return { start: start.toISOString(), end: end.toISOString() };
+
+  return {
+    start: start.toISOString(),
+    end: end.toISOString(),
+  };
 }
 
 export async function getAccessState(): Promise<AccessState> {
@@ -47,11 +51,15 @@ export async function getAccessState(): Promise<AccessState> {
     };
   }
 
-  const { data: subscription } = await supabase
+  const { data: subscription, error: subscriptionError } = await supabase
     .from("subscriptions")
     .select("plan, status, subscription_id, paypal_subscription_id")
     .eq("user_id", user.id)
     .maybeSingle();
+
+  if (subscriptionError) {
+    console.error("SUBSCRIPTION READ ERROR", subscriptionError);
+  }
 
   let plan: UserPlan = "free";
 
@@ -91,7 +99,6 @@ export async function getAccessState(): Promise<AccessState> {
       .from("analysis_usage")
       .select("*", { count: "exact", head: true })
       .eq("user_id", user.id)
-      .eq("event_type", "analyze")
       .gte("created_at", start)
       .lt("created_at", end);
 
@@ -128,13 +135,16 @@ export async function getAccessState(): Promise<AccessState> {
 export async function registerAnalyzeUsage(userId: string) {
   const supabase = await createSupabaseServerClient();
 
-  const { error } = await supabase.from("analysis_usage").insert({
+  const payload = {
     user_id: userId,
-    event_type: "analyze",
     created_at: new Date().toISOString(),
-  });
+  };
+
+  const { error } = await supabase.from("analysis_usage").insert(payload);
 
   if (error) {
     console.error("USAGE TRACKING ERROR", error);
+  } else {
+    console.log("USAGE TRACKING INSERT OK", payload);
   }
 }
