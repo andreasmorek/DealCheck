@@ -3,15 +3,17 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
 export async function GET(request: Request) {
-  const { searchParams, origin } = new URL(request.url);
-  const code = searchParams.get("code");
-  const next = searchParams.get("next") ?? "/";
+  const requestUrl = new URL(request.url);
+  const code = requestUrl.searchParams.get("code");
+  const next = requestUrl.searchParams.get("next") ?? "/";
 
   if (!code) {
-    return NextResponse.redirect(`${origin}/login?error=no_code`);
+    return NextResponse.redirect(new URL("/login?error=no_code", requestUrl.origin));
   }
 
   const cookieStore = await cookies();
+
+  const response = NextResponse.redirect(new URL(next, requestUrl.origin));
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -23,7 +25,7 @@ export async function GET(request: Request) {
         },
         setAll(cookiesToSet) {
           cookiesToSet.forEach(({ name, value, options }) => {
-            cookieStore.set(name, value, options);
+            response.cookies.set(name, value, options);
           });
         },
       },
@@ -34,8 +36,10 @@ export async function GET(request: Request) {
 
   if (error) {
     console.error("Auth Callback Error:", error);
-    return NextResponse.redirect(`${origin}/login?error=callback_failed`);
+    return NextResponse.redirect(
+      new URL("/login?error=callback_failed", requestUrl.origin)
+    );
   }
 
-  return NextResponse.redirect(`${origin}${next}`);
+  return response;
 }

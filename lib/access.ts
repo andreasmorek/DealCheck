@@ -20,9 +20,7 @@ const FREE_LIMIT = 3;
 function getMonthRange() {
   const now = new Date();
   const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-  const end = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)
-  );
+  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
 
   return {
     start: start.toISOString(),
@@ -38,18 +36,13 @@ export async function getAccessState(): Promise<AccessState> {
     error: userError,
   } = await supabase.auth.getUser();
 
-  console.log("ACCESS USER", {
-    hasUser: !!user,
-    userId: user?.id ?? null,
-    userError: userError?.message ?? null,
-  });
-
   if (userError || !user) {
+    console.error("ACCESS USER ERROR", userError);
     return {
       authenticated: false,
       allowed: false,
       plan: "free",
-      reason: "Bitte logge dich ein.",
+      reason: "Bitte logge dich ein und nutze DealCheck kostenlos.",
       userId: null,
       usage: {
         used: 0,
@@ -59,37 +52,30 @@ export async function getAccessState(): Promise<AccessState> {
     };
   }
 
-  const { data: subscription, error: subscriptionError } = await supabase
+  const { data: subscription, error: subError } = await supabase
     .from("subscriptions")
-    .select("plan, status, subscription_id, paypal_subscription_id")
+    .select("status, plan, created_at")
     .eq("user_id", user.id)
+    .eq("status", "active")
+    .order("created_at", { ascending: false })
+    .limit(1)
     .maybeSingle();
 
-  console.log("ACCESS SUBSCRIPTION", {
-    userId: user.id,
-    subscription,
-    subscriptionError: subscriptionError?.message ?? null,
-  });
+  if (subError) {
+    console.error("SUBSCRIPTION LOAD ERROR", subError);
+  }
 
   let plan: UserPlan = "free";
 
-  if (subscription) {
-    const rawPlan = String(subscription.plan || "").toLowerCase();
-    const rawStatus = String(subscription.status || "").toLowerCase();
-    const hasSubscription =
-      Boolean(subscription.paypal_subscription_id) ||
-      Boolean(subscription.subscription_id);
-
-    if (rawStatus === "active" && (rawPlan === "pro" || hasSubscription)) {
-      plan = "pro";
-    }
+  if (subscription && String(subscription.plan || "").toLowerCase() === "pro") {
+    plan = "pro";
   }
 
   if (plan === "pro") {
     return {
       authenticated: true,
       allowed: true,
-      plan,
+      plan: "pro",
       userId: user.id,
       usage: {
         used: 0,
@@ -105,40 +91,33 @@ export async function getAccessState(): Promise<AccessState> {
     const { start, end } = getMonthRange();
 
     const { count, error } = await supabase
-      .from("analysis_usage")
+      .from("usage_tracking")
       .select("*", { count: "exact", head: true })
       .eq("user_id", user.id)
+      .eq("event_type", "analyze")
       .gte("created_at", start)
       .lt("created_at", end);
 
-    console.log("ACCESS COUNT QUERY", {
-      userId: user.id,
-      start,
-      end,
-      count,
-      error: error?.message ?? null,
-    });
-
     if (error) {
+      console.error("USAGE COUNT ERROR", error);
       used = 0;
     } else {
       used = count ?? 0;
     }
-  } catch (error) {
-    console.error("USAGE COUNT CATCH", error);
+
+    console.log("USAGE COUNT DEBUG", {
+      userId: user.id,
+      start,
+      end,
+      used,
+    });
+  } catch (err) {
+    console.error("USAGE COUNT EXCEPTION", err);
     used = 0;
   }
 
   const remaining = Math.max(FREE_LIMIT - used, 0);
   const allowed = used < FREE_LIMIT;
-
-  console.log("ACCESS RESULT", {
-    userId: user.id,
-    used,
-    remaining,
-    allowed,
-    limit: FREE_LIMIT,
-  });
 
   return {
     authenticated: true,
@@ -146,7 +125,7 @@ export async function getAccessState(): Promise<AccessState> {
     plan: "free",
     reason: allowed
       ? undefined
-      : "Upgrade erforderlich. Dein Free-Limit ist erreicht.",
+      : "Deine 3 kostenlosen DealChecks für diesen Monat sind aufgebraucht.",
     userId: user.id,
     usage: {
       used,
@@ -161,26 +140,22 @@ export async function registerAnalyzeUsage(userId: string) {
 
   const payload = {
     user_id: userId,
+    event_type: "analyze",
     created_at: new Date().toISOString(),
   };
 
-  console.log("USAGE INSERT START", payload);
-
   const { data, error } = await supabase
-    .from("analysis_usage")
+    .from("usage_tracking")
     .insert(payload)
     .select();
 
-  console.log("USAGE INSERT RESULT", {
+  console.log("USAGE INSERT DEBUG", {
     payload,
-    data,
-    error: error
-      ? {
-          message: error.message,
-          details: error.details,
-          hint: error.hint,
-          code: error.code,
-        }
-      : null,
+    inserted: data,
+    error,
   });
+
+  if (error) {
+    throw error;
+  }
 }
